@@ -62,6 +62,90 @@ def lakh(v):
     return f'₹{abs(v) / 1e5:,.1f} lakh'
 
 
+# Duplicate detection: names that differ only by a misspelt word, or (for party and staff accounts in the same
+# group) where one name's words contain the other's once numbers and generic words are ignored.
+DICT_PATH = '/usr/share/dict/words'
+FILLER = {'for', 'of', 'the', 'and', 'dhs', 'ldi', 'fc', 'local', 'new'}
+GENERIC = {'adv', 'advance', 'advances', 'account', 'acc', 'ac', 'a', 'c', 'exp', 'expense', 'expenses', 'payable', 'staff'}
+
+
+def _words():
+    try:
+        with open(DICT_PATH) as f:
+            return {w.strip().lower() for w in f}
+    except OSError:
+        return None
+
+
+def _known(w, words):
+    return (w in words or w.isdigit() or len(w) <= 3
+            or any(w.endswith(s) and w[:-len(s)] in words for s in ('s', 'es', 'ed', 'ing', 'er')))
+
+
+def _edit_distance(a, b):
+    prev2, prev = None, list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] != b[j - 1]))
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                cur[j] = min(cur[j], prev2[j - 2] + 1)
+        prev2, prev = prev, cur
+    return prev[-1]
+
+
+def duplicate_reason(a, b, words, containment):
+    from difflib import SequenceMatcher
+    ta, tb = re.findall(r'[a-z]+|[0-9]+', a.lower()), re.findall(r'[a-z]+|[0-9]+', b.lower())
+    if ta == tb:
+        return 'Names differ only in spacing or punctuation'
+    if words is not None:
+        fixes, extra = [], []
+        for op, i1, i2, j1, j2 in SequenceMatcher(None, ta, tb).get_opcodes():
+            if op == 'equal':
+                continue
+            pairs = list(zip(ta[i1:i2], tb[j1:j2]))
+            if op == 'replace' and i2 - i1 == j2 - j1 and all(
+                    min(len(x), len(y)) >= 4 and _edit_distance(x, y) <= 2 and not (_known(x, words) and _known(y, words))
+                    for x, y in pairs):
+                fixes += pairs
+            else:
+                extra += ta[i1:i2] + tb[j1:j2]
+        if fixes and all(w in FILLER for w in extra):
+            return 'Spelling: ' + ', '.join(f'"{x}" / "{y}"' for x, y in fixes)
+    if containment:
+        sa = {w for w in ta if w not in GENERIC and not w.isdigit()}
+        sb = {w for w in tb if w not in GENERIC and not w.isdigit()}
+        if sa and sb and sa != sb and (sa <= sb or sb <= sa):
+            return 'Same account in the same group, one name abbreviated or extended'
+    return None
+
+
+def find_duplicates(led, ent, cca, orgs):
+    from itertools import combinations
+    words = _words()
+    posts = defaultdict(int)
+    for r in ent:
+        posts[('L', r['company'], r['ledger'])] += 1
+    for r in cca:
+        posts[('C', orgs[r['company']], r['cost_centre'])] += 1
+    out = []
+    for c in sorted({r['company'] for r in led}):
+        for x, y in combinations([r for r in led if r['company'] == c], 2):
+            why = duplicate_reason(x['ledger'], y['ledger'], words,
+                                   x['group_name'] == y['group_name'] and x['nature'] in ('Asset', 'Liability'))
+            if why:
+                out.append(['Ledger', c, x['ledger'], y['ledger'], why, posts[('L', c, x['ledger'])], posts[('L', c, y['ledger'])]])
+    for org in sorted(set(orgs.values())):
+        names = sorted({r['cost_centre'] for r in cca if orgs[r['company']] == org})
+        for x, y in combinations(names, 2):
+            why = duplicate_reason(x, y, words, False)
+            if why:
+                books = ', '.join(sorted({r['company'] for r in cca if orgs[r['company']] == org and r['cost_centre'] in (x, y)}))
+                out.append(['Cost centre', books, x, y, why, posts[('C', org, x)], posts[('C', org, y)]])
+    return out
+
+
 def build_data(tables):
     co = read(f'{tables}/dim_company.csv')
     co.sort(key=lambda r: ORDER.index(r['company']) if r['company'] in ORDER else 99)
@@ -145,7 +229,7 @@ def build_data(tables):
         rows = [x for x in nocc if x[0] == i and nature.get((c, x[3])) == 'Expense']
         if rows:
             flags.append(['warn', f'{lakh(sum(x[4] for x in rows))} of {c} expenditure has no cost centre',
-                          f'{len(rows)} postings, listed in the table above, are not assigned to any project.'])
+                          f'{len(rows)} postings, listed below, are not assigned to any project.'])
     # 5. bank accounts that appear in more than one set of books
     banks, label = defaultdict(set), {}
     for r in led:
@@ -161,8 +245,14 @@ def build_data(tables):
         flags.append(['warn', 'The fund side of the balance sheet is incomplete',
                       f'Opening balances do not add up to zero in {", ".join(gaps)} because a Day Book export only includes ledgers with transactions. '
                       'Cash and bank balances are complete; export All Masters as well for a full balance sheet.'])
+    # 7. ledgers and cost centres that look like duplicates
+    dups = find_duplicates(led, ent, cca, orgs)
+    if dups:
+        flags.append(['warn', f'{len(dups)} possible duplicate {"ledgers or cost centres" if len(dups) > 1 else "ledger or cost centre"}',
+                      'The names listed below look like the same account with a typo, an abbreviation or an extra word, so postings may be '
+                      'split between them. The Day Book export only contains ledgers with postings, so duplicates without postings are not detected.'])
 
-    return dict(companies=co, months=months, ccs=ccs, period=period, built=dt.date.today().strftime('%-d %b %Y'),
+    return dict(dups=dups,companies=co, months=months, ccs=ccs, period=period, built=dt.date.today().strftime('%-d %b %Y'),
                 ledgers=[[comps.index(r['company']), r['ledger'], r['group_name'], r['primary_group'], r['nature'], round(r['opening_balance'], 2)] for r in led],
                 lines=lines, nocc=nocc, flags=flags)
 

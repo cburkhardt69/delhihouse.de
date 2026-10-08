@@ -63,6 +63,7 @@ svg text{fill:var(--muted);font-family:var(--sans);font-size:11px}
 .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.78rem;color:var(--muted);margin-top:6px}
 .legend span{display:inline-flex;gap:6px;align-items:center}
 .flags{display:grid;gap:8px;margin:0;padding:0;list-style:none}
+.sub3{font-size:.95rem;font-weight:600;margin:22px 0 8px}
 .flag{border-left:3px solid var(--warn);background:var(--warnbg);padding:8px 12px;border-radius:0 8px 8px 0;font-size:.85rem}
 .flag.crit{border-color:var(--crit);background:var(--critbg)}
 .flag b{display:block;margin-bottom:2px}
@@ -130,13 +131,14 @@ svg text{fill:var(--muted);font-family:var(--sans);font-size:11px}
     </section>
 
     <section class="panel wide">
-      <h2>Income and expense postings without a cost centre</h2>
-      <div class="tbl"><table id="nocc"></table></div>
-    </section>
-
-    <section class="panel wide">
       <h2>Points to check with the accountant</h2>
       <ul class="flags" id="flags"></ul>
+      <h3 class="sub3">Possible duplicate ledgers and cost centres</h3>
+      <div class="tbl"><table id="dups"></table></div>
+      <div class="hint">Found automatically from the names: a misspelt word, or for party and staff accounts in the same group, one name contained in the other. Please confirm with the accountant before merging.</div>
+      <h3 class="sub3">All income and expense postings without a cost centre</h3>
+      <div class="hint" id="noccsum" style="margin:0 0 8px"></div>
+      <div class="tbl"><table id="nocc"></table></div>
     </section>
   </div>
 </div>
@@ -203,7 +205,7 @@ function orgTable(){
 }
 
 function render(){
-  syncGroups();orgTable();noccTable();
+  syncGroups();orgTable();
   const R=lines(), RA=lines(false);
   const exp=R.filter(r=>L[r[0]].nature==='Expense'), inc=R.filter(r=>L[r[0]].nature==='Income');
   const tExp=exp.reduce((s,r)=>s+r[3],0), tInc=-inc.reduce((s,r)=>s+r[3],0);
@@ -274,7 +276,9 @@ document.getElementById('sub').textContent=`Tally Day Book exports · ${D.period
 document.getElementById('bankh').textContent='Cash and bank balances on '+D.period.toLabel;
 if(D.months.length)document.getElementById('cumh').textContent='Cumulative income and expenditure since '+new Date(D.months[0]+'-01T00:00:00').toLocaleString('en-GB',{day:'numeric',month:'long',year:'numeric'});
 document.getElementById('flags').innerHTML=D.flags.length?D.flags.map(([c,t,d])=>`<li class="flag ${c==='crit'?'crit':''}"><b>${esc(t)}</b>${esc(d)}</li>`).join(''):'<li class="hint">No issues detected by the automatic checks.</li>';
-function noccTable(){const rows=D.nocc.filter(r=>on[r[0]]&&(month<0||r[1].slice(0,7)===D.months[month]));
-  document.getElementById('nocc').innerHTML=rows.length?'<tr><th>Books</th><th>Date</th><th>Voucher</th><th>Ledger</th><th class="num">Amount</th><th>Narration</th></tr>'+rows.map(r=>`<tr><td><span class="tag">${esc(D.companies[r[0]].company)}</span></td><td style="white-space:nowrap">${esc(r[1])}</td><td style="white-space:nowrap">${esc(r[2])}</td><td>${esc(r[3])}</td><td class="num">${fmt(r[4])}</td><td>${esc(r[5])}</td></tr>`).join(''):'<tr><td class="hint">None in the selected books and period.</td></tr>'}
+document.getElementById('dups').innerHTML=D.dups.length?'<tr><th>Type</th><th>Books</th><th>Name</th><th>Similar name</th><th>Why</th><th class="num">Postings (name / similar)</th></tr>'+
+  D.dups.map(r=>`<tr><td style="white-space:nowrap">${esc(r[0])}</td><td><span class="tag">${esc(r[1])}</span></td><td>${esc(r[2])}</td><td>${esc(r[3])}</td><td>${esc(r[4])}</td><td class="num" style="white-space:nowrap">${r[5]} / ${r[6]}</td></tr>`).join(''):'<tr><td class="hint">No similar names found.</td></tr>';
+document.getElementById('noccsum').textContent=D.nocc.length?`Whole period, all four sets of books: `+D.companies.map((c,i)=>{const rs=D.nocc.filter(r=>r[0]===i);return rs.length?`${c.company} ${rs.length} postings, ${fmt(rs.reduce((s,r)=>s+r[4],0))}`:null}).filter(Boolean).join(' · ')+'. Not affected by the filters at the top.':'';
+document.getElementById('nocc').innerHTML=D.nocc.length?'<tr><th>Books</th><th>Date</th><th>Voucher</th><th>Ledger</th><th>Type</th><th class="num">Amount</th><th>Narration</th></tr>'+D.nocc.map(r=>{const n=(L.find(l=>l.c===r[0]&&l.name===r[3])||{}).nature||'';return `<tr><td><span class="tag">${esc(D.companies[r[0]].company)}</span></td><td style="white-space:nowrap">${esc(r[1])}</td><td style="white-space:nowrap">${esc(r[2])}</td><td>${esc(r[3])}</td><td>${esc(n)}</td><td class="num">${fmt(r[4])}</td><td>${esc(r[5])}</td></tr>`}).join(''):'<tr><td class="hint">Every income and expense posting has a cost centre.</td></tr>';
 render();
 </script>
