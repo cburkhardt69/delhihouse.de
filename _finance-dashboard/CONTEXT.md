@@ -43,6 +43,12 @@ Sensitive findings (figures, compliance questions) are kept in `CLAUDE.local.md`
   sheet is incomplete; cash and bank balances are complete. "All Masters" export (Gateway > Alt+E > Masters) gives
   all ledgers with opening balances but no vouchers, and does not include cost-centre masters.
 - Skip vouchers with ISCANCELLED / ISOPTIONAL / ISDELETED = Yes.
+- Masters export (Export > Masters, type Accounting Masters, "Export closing balance as opening balance" = No) is
+  optional per company. `find_exports()` sorts files by content: with vouchers = Day Book, without = masters.
+  `convert()` merges masters into the Day Book's groups, ledgers and cost centres (column `source` in `dim_ledger`:
+  daybook / masters / both). If a ledger's opening balance differs between the two, the Day Book value is kept and
+  the ledger goes to `check_opening_mismatch` (sign that the closing-as-opening option was on).
+  With a masters export, opening balances must sum to zero; otherwise the build flags a Tally opening difference.
 - Opening cost-centre splits are read from any COSTCENTREALLOCATIONS.LIST inside a LEDGER master. As of October 2026 no
   export contained one, so check the first export after cost centres are enabled on the bank accounts.
 

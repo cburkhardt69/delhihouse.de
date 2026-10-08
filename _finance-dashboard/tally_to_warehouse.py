@@ -39,25 +39,62 @@ def amt(s):
         return 0.0
     s = s.split('=')[-1].split('@')[0]  # forex amounts like "-100.00 EUR @ ... = -9000.00"
     s = re.sub(r'[^0-9.\-]', '', s)
-    return -float(s) if s not in ('', '-', '.') else 0.0  # Tally: negative = debit -> flip
+    return -float(s) + 0.0 if s not in ('', '-', '.') else 0.0  # Tally: negative = debit -> flip
 
 
 def t(e, tag):
     return (e.findtext(tag) or '').strip()
 
 
-def convert(out, pairs):
-    """pairs: list of (company_code, xml_path). Writes CSV tables to out."""
+def read_masters(root):
+    """Groups, ledgers (with opening balance and its cost-centre split) and cost centres found in an export."""
+    groups = {g.get('NAME'): t(g, 'PARENT') for g in root.iter('GROUP')}
+    ledgers = {}
+    for l in root.iter('LEDGER'):
+        n = l.get('NAME')
+        if n in ledgers:
+            continue
+        # Opening balance split by cost centre, stored in the ledger master when cost centres are on
+        ccop = [(t(cat, 'CATEGORY'), t(cc, 'NAME'), round(amt(cc.findtext('AMOUNT')), 2))
+                for cat in [l] + list(l.iter('CATEGORYALLOCATIONS.LIST')) for cc in cat.findall('COSTCENTREALLOCATIONS.LIST')]
+        ledgers[n] = dict(parent=t(l, 'PARENT'), ob=round(amt(l.findtext('OPENINGBALANCE')), 2),
+                          cc_on=t(l, 'ISCOSTCENTRESON'), ccop=ccop)
+    costcentres = {c.get('NAME'): (t(c, 'PARENT'), t(c, 'CATEGORY')) for c in root.iter('COSTCENTRE')}
+    return groups, ledgers, costcentres
+
+
+def is_daybook(path):
+    """A Day Book export contains vouchers; a masters export does not."""
+    root = load(path)
+    return root.find('.//VOUCHER') is not None
+
+
+def convert(out, pairs, masters=None):
+    """pairs: list of (company_code, day_book_xml_path); masters: optional {company_code: masters_xml_path}.
+    Masters exports supply all ledgers with their opening balances; vouchers come from the Day Book."""
     os.makedirs(out, exist_ok=True)
-    rows = {k: [] for k in ('company', 'group', 'ledger', 'ledger_cc_opening', 'costcentre', 'voucher', 'entry', 'cc_alloc')}
+    masters = masters or {}
+    rows = {k: [] for k in ('company', 'group', 'ledger', 'ledger_cc_opening', 'costcentre', 'voucher', 'entry', 'cc_alloc',
+                            'opening_mismatch')}
     for code, path in pairs:
         root = load(path)
         cname = t(root, './/SVCURRENTCOMPANY')
         rows['company'].append(dict(company=code, company_name=cname, fund_type='FC' if 'FC' in code.upper() else 'Local',
-                                    organisation=code.split('-')[0]))
-        groups = {}
-        for g in root.iter('GROUP'):
-            groups[g.get('NAME')] = t(g, 'PARENT')
+                                    organisation=code.split('-')[0], masters_export='Yes' if code in masters else 'No'))
+        groups, ledgers, costcentres = read_masters(root)
+        source = {n: 'daybook' for n in ledgers}
+        if code in masters:
+            mg, ml, mc = read_masters(load(masters[code]))
+            groups.update(mg)
+            costcentres.update(mc)
+            for n, m in ml.items():
+                d = ledgers.get(n)
+                if d and abs(d['ob'] - m['ob']) > 1:
+                    # Day Book and masters disagree: most likely "closing balance as opening balance" was on
+                    rows['opening_mismatch'].append(dict(company=code, ledger=n, daybook_opening=d['ob'], masters_opening=m['ob']))
+                    m = dict(m, ob=d['ob'], ccop=d['ccop'])
+                ledgers[n] = m
+                source[n] = 'both' if d else 'masters'
         def chain(name):
             c, seen = [], set()
             while name and name not in seen:
@@ -67,28 +104,17 @@ def convert(out, pairs):
             c = chain(g)
             rows['group'].append(dict(company=code, group_name=g, parent=p, primary_group=c[0],
                                       level2=c[1] if len(c) > 1 else '', nature=PRIMARY_NATURE.get(c[0], '')))
-        seen_led = set()
-        for l in root.iter('LEDGER'):
-            n = l.get('NAME')
-            if n in seen_led:
-                continue
-            seen_led.add(n)
-            p = t(l, 'PARENT'); c = chain(p) if p else ['']
+        for n, l in ledgers.items():
+            p = l['parent']; c = chain(p) if p else ['']
             nature = PRIMARY_NATURE.get(c[0], '')
             rows['ledger'].append(dict(company=code, ledger=n, group_name=p, primary_group=c[0],
                                        level2=c[1] if len(c) > 1 else '', nature=nature,
                                        statement='Balance Sheet' if nature in ('Asset', 'Liability') else ('Income & Expenditure' if nature else ''),
-                                       opening_balance=round(amt(l.findtext('OPENINGBALANCE')), 2),
-                                       cost_centres_on=t(l, 'ISCOSTCENTRESON')))
-            # Opening balance split by cost centre, stored in the ledger master when cost centres are on
-            for cat in [l] + list(l.iter('CATEGORYALLOCATIONS.LIST')):
-                direct = cat.findall('COSTCENTREALLOCATIONS.LIST')
-                for cc in direct:
-                    rows['ledger_cc_opening'].append(dict(company=code, ledger=n, category=t(cat, 'CATEGORY'),
-                                                          cost_centre=t(cc, 'NAME'), amount=round(amt(cc.findtext('AMOUNT')), 2)))
-        for c in root.iter('COSTCENTRE'):
-            rows['costcentre'].append(dict(company=code, cost_centre=c.get('NAME'), parent=t(c, 'PARENT'),
-                                           category=t(c, 'CATEGORY')))
+                                       opening_balance=l['ob'], cost_centres_on=l['cc_on'], source=source[n]))
+            for cat, cc, a in l['ccop']:
+                rows['ledger_cc_opening'].append(dict(company=code, ledger=n, category=cat, cost_centre=cc, amount=a))
+        for n, (p, cat) in costcentres.items():
+            rows['costcentre'].append(dict(company=code, cost_centre=n, parent=p, category=cat))
         eid = 0
         for v in root.iter('VOUCHER'):
             if t(v, 'ISCANCELLED') == 'Yes' or t(v, 'ISOPTIONAL') == 'Yes' or t(v, 'ISDELETED') == 'Yes':
@@ -109,7 +135,7 @@ def convert(out, pairs):
                         rows['cc_alloc'].append(dict(company=code, entry_id=entry_id, date=date, month=date[:7],
                                                      ledger=t(le, 'LEDGERNAME'), category=t(cat, 'CATEGORY'),
                                                      cost_centre=t(cc, 'NAME'), amount=round(amt(cc.findtext('AMOUNT')), 2)))
-    names = dict(company='dim_company', group='dim_group', ledger='dim_ledger', ledger_cc_opening='fact_ledger_cc_opening', costcentre='dim_costcentre',
+    names = dict(company='dim_company', group='dim_group', ledger='dim_ledger', ledger_cc_opening='fact_ledger_cc_opening', opening_mismatch='check_opening_mismatch', costcentre='dim_costcentre',
                  voucher='dim_voucher', entry='fact_entry', cc_alloc='fact_costcentre_alloc')
     for k, rs in rows.items():
         if not rs:

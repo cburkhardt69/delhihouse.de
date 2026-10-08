@@ -24,6 +24,10 @@ security add-generic-password -s dhs-finance-dashboard -a dashboard -w   # promp
 ## Monthly update
 1. In Tally, export the Day Book (XML Data Interchange, financial year to date) for all four companies and download
    the files to `~/Downloads`. File names don't matter; the company is read from the file content.
+   Optionally also export the masters per company (Export > Masters > Configure: type **Accounting Masters**,
+   format XML, **"Export closing balance as opening balance" = No**) into the same folder. They supply every
+   ledger with its opening balance and cost-centre split, so the balance sheet is complete. The build tells
+   Day Book and masters files apart by content (vouchers or not) and checks the masters against the Day Book.
 2. Double-click `_finance-dashboard/update_dashboard.command`, or run `/update-finance-dashboard` in Claude Code.
    The Claude Code command also refreshes the private, unencrypted copy of the dashboard on claude.ai
    (`refresh_dashboard.py --artifact-page FILE`, which refuses to write inside this repository).

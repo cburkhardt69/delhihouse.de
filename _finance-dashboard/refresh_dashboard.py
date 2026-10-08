@@ -45,12 +45,13 @@ def company_of(path):
 
 
 def find_exports(inbox):
-    found = {}
+    """Newest Day Book export and newest masters export per company, recognised by content (vouchers or not)."""
+    daybook, masters = {}, {}
     for p in sorted(glob.glob(os.path.join(os.path.expanduser(inbox), '*.xml')), key=os.path.getmtime):
         code = COMPANIES.get(company_of(p) or '')
         if code:
-            found[code] = p  # newest wins (sorted by modification time)
-    return found
+            (daybook if tally_to_warehouse.is_daybook(p) else masters)[code] = p  # newest wins
+    return daybook, masters
 
 
 def read(path):
@@ -107,7 +108,7 @@ def _edit_distance(a, b):
 
 def duplicate_reason(a, b, words, containment):
     from difflib import SequenceMatcher
-    ta, tb = re.findall(r'[a-z]+|[0-9]+', a.lower()), re.findall(r'[a-z]+|[0-9]+', b.lower())
+    ta, tb = re.findall(r'[a-z`]+|[0-9]+', a.lower()), re.findall(r'[a-z`]+|[0-9]+', b.lower())
     if ta == tb:
         return 'Names differ only in spacing or punctuation'
     if words is not None:
@@ -316,11 +317,27 @@ def build_data(tables):
             flags.append(['warn', 'One bank account appears in several sets of books',
                           f'"{label[name]}" is a ledger in {", ".join(sorted(cs))}. Its balance is only meaningful per set of books together with the inter-company ledgers.'])
     # 6. opening balances incomplete (Day Book exports omit untouched ledgers)
-    gaps = [c for c in comps if abs(sum(r['opening_balance'] for r in led if r['company'] == c)) > 1]
+    with_masters = {r['company'] for r in co if r.get('masters_export') == 'Yes'}
+    diff = {c: sum(r['opening_balance'] for r in led if r['company'] == c) for c in comps}
+    gaps = [c for c in comps if abs(diff[c]) > 1 and c not in with_masters]
     if gaps:
         flags.append(['warn', 'The fund side of the balance sheet is incomplete',
                       f'Opening balances do not add up to zero in {", ".join(gaps)} because a Day Book export only includes ledgers with transactions. '
-                      'Cash and bank balances are complete; export All Masters as well for a full balance sheet.'])
+                      'Cash and bank balances are complete; export the Accounting Masters as well (see README) for a full balance sheet.'])
+    mm_path = f'{tables}/check_opening_mismatch.csv'
+    mismatch = read(mm_path) if os.path.exists(mm_path) else []
+    unreliable = {r['company'] for r in mismatch}
+    unbalanced = [c for c in comps if abs(diff[c]) > 1 and c in with_masters and c not in unreliable]
+    if unbalanced:
+        flags.append(['crit', 'Opening balances in Tally do not balance',
+                      'With the masters export, all opening balances should add up to zero, but they differ by '
+                      + ', '.join(f'{lakh(diff[c])} ({"more debit" if diff[c] > 0 else "more credit"}) in {c}' for c in unbalanced)
+                      + '. Tally shows this as "Difference in opening balances"; the accountant should correct the opening entries.'])
+    if mismatch:
+        flags.append(['crit', 'The masters export has different opening balances from the Day Book',
+                      f'{len(mismatch)} {"ledgers" if len(mismatch) > 1 else "ledger"} in {", ".join(sorted(unreliable))} {"differ" if len(mismatch) > 1 else "differs"}, e.g. "{mismatch[0]["ledger"]}". '
+                      'Most likely "Export closing balance as opening balance" was switched on. The Day Book figures were used for these ledgers; '
+                      'export the masters again with that option off.'])
     # 7. cash and bank not split by cost centre
     cash = [r for r in led if r['group_name'] in ('Bank Accounts', 'Cash-in-Hand')]
     alloc_close = defaultdict(float)
@@ -341,13 +358,17 @@ def build_data(tables):
                       + '; opening balances also need a cost-centre split in the ledger master.'])
     # 8. ledgers and cost centres that look like duplicates, and misspelt names
     kd, km = known_issues()
-    dups = find_duplicates(led, ent, cca, orgs) + kd
+    dups = find_duplicates(led, ent, cca, orgs)
+    pairs = {frozenset(r[2:4]) for r in dups}
+    dups += [r for r in kd if frozenset(r[2:4]) not in pairs]  # hand-recorded cases the checks did not find themselves
     costcentres = read(f'{tables}/dim_costcentre.csv') if os.path.exists(f'{tables}/dim_costcentre.csv') else []
-    miss = find_misspellings(led, costcentres) + km
+    miss = find_misspellings(led, costcentres)
+    named = {r[2] for r in miss}
+    miss += [r for r in km if r[2] not in named]
     if dups:
         flags.append(['warn', f'{len(dups)} possible duplicate {"ledgers or cost centres" if len(dups) > 1 else "ledger or cost centre"}',
                       'The names listed below look like the same account with a typo, an abbreviation or an extra word, so postings may be '
-                      'split between them. The Day Book export only contains ledgers with postings; duplicates found elsewhere are added by hand.'])
+                      'split between them. Ledgers without postings are only checked for books with a masters export; other cases come from known_issues.csv.'])
     if miss:
         flags.append(['warn', f'{len(miss)} ledger and cost-centre names are misspelt',
                       'Listed below with the probable correct spelling. Renaming them in Tally keeps reports and searches consistent.'])
@@ -426,17 +447,18 @@ def main():
     if not password:
         sys.exit('Set the DASHBOARD_PASSWORD environment variable (update_dashboard.command reads it from the Keychain).')
 
-    found = find_exports(a.inbox)
+    found, masters = find_exports(a.inbox)
     missing = [c for c in ORDER if c not in found]
     for c in ORDER:
-        print(f'  {c:10} {os.path.basename(found[c]) if c in found else "— not found"}')
+        print(f'  {c:10} Day Book: {os.path.basename(found[c]) if c in found else "— not found"}'
+              f'   masters: {os.path.basename(masters[c]) if c in masters else "—"}')
     if not found or (missing and not a.allow_partial):
         sys.exit(f'Missing exports for: {", ".join(missing)}. Download them from Tally into {a.inbox} and run again.')
 
     tables = os.path.join(a.warehouse, 'tables')
     if os.path.isdir(tables):
         shutil.rmtree(tables)
-    tally_to_warehouse.convert(tables, [(c, found[c]) for c in ORDER if c in found])
+    tally_to_warehouse.convert(tables, [(c, found[c]) for c in ORDER if c in found], {c: p for c, p in masters.items() if c in found})
 
     data = build_data(tables)
     template = open(os.path.join(HERE, 'dashboard_template.html'), encoding='utf-8').read()
@@ -455,6 +477,8 @@ def main():
         os.makedirs(arch, exist_ok=True)
         for c, p in found.items():
             shutil.move(p, os.path.join(arch, f'{c}.xml'))
+        for c, p in masters.items():
+            shutil.move(p, os.path.join(arch, f'{c}-masters.xml'))
         print(f'Exports archived in {arch}')
 
 
