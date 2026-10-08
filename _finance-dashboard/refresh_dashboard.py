@@ -238,8 +238,14 @@ def build_data(tables):
             agg[(lkey[(r['company'], r['ledger'])], r['month'], '')] += r['amount']
     for r in cca:
         agg[(lkey[(r['company'], r['ledger'])], r['month'], r['cost_centre'])] += r['amount']
-    ccs = sorted({k[2] for k in agg})
+    ccop_path = f'{tables}/fact_ledger_cc_opening.csv'
+    ccop = [r for r in read(ccop_path) if (r['company'], r['ledger']) in lkey] if os.path.exists(ccop_path) else []
+    ccs = sorted({k[2] for k in agg} | {r['cost_centre'] for r in ccop} | {''})
     lines = [[li, months.index(m), ccs.index(c), round(v, 2)] for (li, m, c), v in agg.items() if abs(v) > 0.004]
+    ccob = defaultdict(float)
+    for r in ccop:
+        ccob[(lkey[(r['company'], r['ledger'])], ccs.index(r['cost_centre']))] += float(r['amount'])
+    ccob = [[li, ci, round(v, 2)] for (li, ci), v in ccob.items() if abs(v) > 0.004]
 
     nature = {(r['company'], r['ledger']): r['nature'] for r in led}
     move = defaultdict(float)
@@ -315,7 +321,25 @@ def build_data(tables):
         flags.append(['warn', 'The fund side of the balance sheet is incomplete',
                       f'Opening balances do not add up to zero in {", ".join(gaps)} because a Day Book export only includes ledgers with transactions. '
                       'Cash and bank balances are complete; export All Masters as well for a full balance sheet.'])
-    # 7. ledgers and cost centres that look like duplicates, and misspelt names
+    # 7. cash and bank not split by cost centre
+    cash = [r for r in led if r['group_name'] in ('Bank Accounts', 'Cash-in-Hand')]
+    alloc_close = defaultdict(float)
+    for r in ccop:
+        alloc_close[(r['company'], r['ledger'])] += float(r['amount'])
+    for r in cca:
+        alloc_close[(r['company'], r['ledger'])] += r['amount']
+    total = sum(closing[(r['company'], r['ledger'])] for r in cash)
+    unalloc = sum(closing[(r['company'], r['ledger'])] - alloc_close[(r['company'], r['ledger'])] for r in cash)
+    off = [r for r in cash if r.get('cost_centres_on') != 'Yes']
+    if abs(unalloc) > 1000:
+        signed = lambda v: ('−' if v < 0 else '') + lakh(v)
+        flags.append(['warn', 'Cash and bank balances are not split by cost centre',
+                      f'Of {signed(total)} closing cash and bank, a net {signed(total - unalloc)} is assigned to cost centres and {signed(unalloc)} '
+                      'is not, so balances per project are incomplete. '
+                      f'{len(off)} of {len(cash)} cash and bank ledgers have cost centres switched off in Tally'
+                      + (f' ({", ".join(sorted({r["company"] + " " + r["ledger"] for r in off}))})' if off else '')
+                      + '; opening balances also need a cost-centre split in the ledger master.'])
+    # 8. ledgers and cost centres that look like duplicates, and misspelt names
     kd, km = known_issues()
     dups = find_duplicates(led, ent, cca, orgs) + kd
     costcentres = read(f'{tables}/dim_costcentre.csv') if os.path.exists(f'{tables}/dim_costcentre.csv') else []
@@ -328,7 +352,7 @@ def build_data(tables):
         flags.append(['warn', f'{len(miss)} ledger and cost-centre names are misspelt',
                       'Listed below with the probable correct spelling. Renaming them in Tally keeps reports and searches consistent.'])
 
-    return dict(dups=dups, miss=miss,companies=co, months=months, ccs=ccs, period=period, built=dt.date.today().strftime('%-d %b %Y'),
+    return dict(dups=dups, miss=miss, ccob=ccob,companies=co, months=months, ccs=ccs, period=period, built=dt.date.today().strftime('%-d %b %Y'),
                 ledgers=[[comps.index(r['company']), r['ledger'], r['group_name'], r['primary_group'], r['nature'], round(r['opening_balance'], 2)] for r in led],
                 lines=lines, nocc=nocc, flags=flags)
 

@@ -87,7 +87,7 @@ svg text{fill:var(--muted);font-family:var(--sans);font-size:11px}
     <section class="panel wide">
       <h2>DHS and LDI side by side</h2>
       <div class="tbl"><table id="orgs"></table></div>
-      <div class="hint">Each organisation's FC and Local books are combined and split by cost centre, largest expenditure first. Entries booked without a cost centre (most donations, interest and bank charges) appear under "No cost centre". Cash and bank is shown only for organisations, because bank accounts are not allocated to cost centres. This table follows the period filter and the books selected above.</div>
+      <div class="hint">Each organisation's FC and Local books are combined and split by cost centre, largest expenditure first. Entries booked without a cost centre (most donations, interest and bank charges) appear under "No cost centre". Cash and bank per cost centre starts from the opening split in the Tally ledger master and moves with postings that carry a cost centre; anything not allocated is shown under "No cost centre", so the rows always add up to the organisation total. This table follows the period filter and the books selected above.</div>
     </section>
 
     <section class="panel wide">
@@ -188,23 +188,31 @@ function stacked(rows,key){ // returns [{k,v,parts}] split by company
 
 function syncGroups(){GROUPS.forEach(([g,fn])=>{const m=D.companies.every((c,i)=>on[i]===fn(c));document.getElementById('grp-'+g).setAttribute('aria-pressed',m)})}
 function orgTable(){
-  const RM=D.lines.filter(([li,mi])=>on[L[li].c]&&(month<0||mi===month)), mvAll=new Map();D.lines.forEach(r=>mvAll.set(r[0],(mvAll.get(r[0])||0)+r[3]));
+  const RM=D.lines.filter(([li,mi])=>on[L[li].c]&&(month<0||mi===month));
   const tot=rs=>({inc:-rs.filter(r=>L[r[0]].nature==='Income').reduce((s,r)=>s+r[3],0),exp:rs.filter(r=>L[r[0]].nature==='Expense').reduce((s,r)=>s+r[3],0)});
-  const cashOf=pred=>L.map((l,i)=>({l,i})).filter(o=>on[o.l.c]&&pred(D.companies[o.l.c])&&['Bank Accounts','Cash-in-Hand'].includes(o.l.group)).reduce((s,o)=>s+o.l.ob+(mvAll.get(o.i)||0),0);
+  // cash and bank per ledger and cost centre: opening split from the ledger master, unallocated rest under "no cost centre"
+  const ms=month<0?0:month, me=month<0?D.months.length-1:month, isCash=l=>['Bank Accounts','Cash-in-Hand'].includes(l.group);
+  const bal=new Map(), add=(k,o,c)=>{const v=bal.get(k)||[0,0];v[0]+=o;v[1]+=c;bal.set(k,v)};
+  L.forEach((l,i)=>{if(isCash(l))add(i+':0',l.ob,l.ob)});
+  (D.ccob||[]).forEach(([li,ci,v])=>{if(isCash(L[li])){add(li+':'+ci,v,v);add(li+':0',-v,-v)}});
+  D.lines.forEach(([li,mi,ci,v])=>{if(isCash(L[li])&&mi<=me)add(li+':'+ci,mi<ms?v:0,v)});
+  const cashOf=(pred,cc)=>{let o=0,c=0;bal.forEach((v,k)=>{const [li,ci]=k.split(':').map(Number);if(on[L[li].c]&&pred(D.companies[L[li].c])&&(cc===undefined||cc===ci)){o+=v[0];c+=v[1]}});return [o,c]};
   const orgs=['DHS','LDI'].filter(org=>D.companies.some((c,i)=>on[i]&&c.organisation===org));
   const rows=[];
   orgs.forEach(org=>{
-    const rs=RM.filter(r=>D.companies[L[r[0]].c].organisation===org);
-    rows.push({k:org,lvl:0,...tot(rs),cash:cashOf(c=>c.organisation===org)});
-    const byCC=new Map();rs.forEach(r=>{const k=r[2];if(!byCC.has(k))byCC.set(k,[]);byCC.get(k).push(r)});
-    [...byCC].map(([k,list])=>({k:D.ccs[k]||'No cost centre',lvl:1,...tot(list),cash:null}))
-      .filter(r=>Math.round(r.inc)||Math.round(r.exp))
-      .sort((a,b)=>(a.k==='No cost centre')-(b.k==='No cost centre')||b.exp-a.exp||b.inc-a.inc)
+    const inOrg=c=>c.organisation===org, rs=RM.filter(r=>inOrg(D.companies[L[r[0]].c]));
+    rows.push({k:org,lvl:0,...tot(rs),cash:cashOf(inOrg)});
+    const ids=new Set(rs.map(r=>r[2]));bal.forEach((v,k)=>{const [li,ci]=k.split(':').map(Number);if(on[L[li].c]&&inOrg(D.companies[L[li].c]))ids.add(ci)});
+    [...ids].map(ci=>({k:D.ccs[ci]||'No cost centre',lvl:1,...tot(rs.filter(r=>r[2]===ci)),cash:cashOf(inOrg,ci)}))
+      .filter(r=>Math.round(r.inc)||Math.round(r.exp)||Math.round(r.cash[0])||Math.round(r.cash[1]))
+      .sort((a,b)=>(a.k==='No cost centre')-(b.k==='No cost centre')||b.exp-a.exp||b.inc-a.inc||b.cash[1]-a.cash[1])
       .forEach(r=>rows.push(r));
   });
   if(orgs.length>1)rows.push({k:'Total',lvl:2,...tot(RM),cash:cashOf(()=>true)});
-  document.getElementById('orgs').innerHTML='<tr><th>Organisation / cost centre</th><th class="num">Income</th><th class="num">Expenditure</th><th class="num">Surplus / deficit</th><th class="num">Cash and bank at period end</th></tr>'+
-    rows.map(r=>`<tr class="lvl${r.lvl}"><td>${esc(r.k)}</td><td class="num">${fmt(r.inc)}</td><td class="num">${fmt(r.exp)}</td><td class="num ${r.inc-r.exp<0?'neg':''}">${fmt(r.inc-r.exp)}</td><td class="num">${r.cash===null?'<span class="hint">–</span>':fmt(r.cash)}</td></tr>`).join('');
+  const d0=new Date(D.months[ms]+'-01T00:00:00'), d1=month<0?D.period.toLabel:new Date(d0.getFullYear(),d0.getMonth()+1,0).toLocaleString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+  const dl=d=>d.toLocaleString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+  document.getElementById('orgs').innerHTML=`<tr><th>Organisation / cost centre</th><th class="num">Income</th><th class="num">Expenditure</th><th class="num">Surplus / deficit</th><th class="num">Cash and bank ${esc(dl(d0))}</th><th class="num">Cash and bank ${esc(d1)}</th></tr>`+
+    rows.map(r=>`<tr class="lvl${r.lvl}"><td>${esc(r.k)}</td><td class="num">${fmt(r.inc)}</td><td class="num">${fmt(r.exp)}</td><td class="num ${r.inc-r.exp<0?'neg':''}">${fmt(r.inc-r.exp)}</td><td class="num">${fmt(r.cash[0])}</td><td class="num">${fmt(r.cash[1])}</td></tr>`).join('');
 }
 
 function render(){

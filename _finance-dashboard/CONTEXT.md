@@ -43,11 +43,14 @@ Sensitive findings (figures, compliance questions) are kept in `CLAUDE.local.md`
   sheet is incomplete; cash and bank balances are complete. "All Masters" export (Gateway > Alt+E > Masters) gives
   all ledgers with opening balances but no vouchers, and does not include cost-centre masters.
 - Skip vouchers with ISCANCELLED / ISOPTIONAL / ISDELETED = Yes.
+- Opening cost-centre splits are read from any COSTCENTREALLOCATIONS.LIST inside a LEDGER master. As of October 2026 no
+  export contained one, so check the first export after cost centres are enabled on the bank accounts.
 
 ## Warehouse tables (CSV, star schema)
 `dim_company` (company, company_name, fund_type FC/Local, organisation DHS/LDI), `dim_group` (flattened hierarchy,
 primary group, nature), `dim_ledger` (group, primary group, nature Asset/Liability/Income/Expense, opening balance,
-cost_centres_on), `dim_costcentre`, `dim_voucher` (date, type, number, narration), `fact_entry` (one row per ledger
+cost_centres_on), `fact_ledger_cc_opening` (opening balance split by cost centre from the ledger master; only written when
+Tally has such a split, e.g. for bank accounts once cost centres are switched on), `dim_costcentre`, `dim_voucher` (date, type, number, narration), `fact_entry` (one row per ledger
 entry), `fact_costcentre_alloc` (one row per cost-centre allocation). Written to `_finance-dashboard/tables/`;
 used XML exports are moved to `_finance-dashboard/archive/<date>/`. Both folders are git-ignored and stay local
 (until October 2026 they were in a "Tally Warehouse" folder in Google Drive).

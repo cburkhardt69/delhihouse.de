@@ -49,7 +49,7 @@ def t(e, tag):
 def convert(out, pairs):
     """pairs: list of (company_code, xml_path). Writes CSV tables to out."""
     os.makedirs(out, exist_ok=True)
-    rows = {k: [] for k in ('company', 'group', 'ledger', 'costcentre', 'voucher', 'entry', 'cc_alloc')}
+    rows = {k: [] for k in ('company', 'group', 'ledger', 'ledger_cc_opening', 'costcentre', 'voucher', 'entry', 'cc_alloc')}
     for code, path in pairs:
         root = load(path)
         cname = t(root, './/SVCURRENTCOMPANY')
@@ -80,6 +80,12 @@ def convert(out, pairs):
                                        statement='Balance Sheet' if nature in ('Asset', 'Liability') else ('Income & Expenditure' if nature else ''),
                                        opening_balance=round(amt(l.findtext('OPENINGBALANCE')), 2),
                                        cost_centres_on=t(l, 'ISCOSTCENTRESON')))
+            # Opening balance split by cost centre, stored in the ledger master when cost centres are on
+            for cat in [l] + list(l.iter('CATEGORYALLOCATIONS.LIST')):
+                direct = cat.findall('COSTCENTREALLOCATIONS.LIST')
+                for cc in direct:
+                    rows['ledger_cc_opening'].append(dict(company=code, ledger=n, category=t(cat, 'CATEGORY'),
+                                                          cost_centre=t(cc, 'NAME'), amount=round(amt(cc.findtext('AMOUNT')), 2)))
         for c in root.iter('COSTCENTRE'):
             rows['costcentre'].append(dict(company=code, cost_centre=c.get('NAME'), parent=t(c, 'PARENT'),
                                            category=t(c, 'CATEGORY')))
@@ -103,7 +109,7 @@ def convert(out, pairs):
                         rows['cc_alloc'].append(dict(company=code, entry_id=entry_id, date=date, month=date[:7],
                                                      ledger=t(le, 'LEDGERNAME'), category=t(cat, 'CATEGORY'),
                                                      cost_centre=t(cc, 'NAME'), amount=round(amt(cc.findtext('AMOUNT')), 2)))
-    names = dict(company='dim_company', group='dim_group', ledger='dim_ledger', costcentre='dim_costcentre',
+    names = dict(company='dim_company', group='dim_group', ledger='dim_ledger', ledger_cc_opening='fact_ledger_cc_opening', costcentre='dim_costcentre',
                  voucher='dim_voucher', entry='fact_entry', cc_alloc='fact_costcentre_alloc')
     for k, rs in rows.items():
         if not rs:
