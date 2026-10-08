@@ -80,7 +80,8 @@ def _words():
 
 # Everyday words missing from the macOS dictionary (web2 is old and American)
 EXTRA_WORDS = {'internet', 'website', 'online', 'software', 'email', 'childcare', 'consultancy', 'microfinance', 'knowhow',
-               'fundraising', 'healthcare', 'centre', 'programme', 'organisation', 'labour'}
+               'fundraising', 'healthcare', 'centre', 'programme', 'organisation', 'labour',
+               'travelling', 'travelled', 'traveller', 'cancelled', 'labelled', 'counselling', 'counsellor', 'enrolment', 'fulfil'}
 # Optional, git-ignored list of issues found outside the Day Book export (e.g. in an All Masters export).
 # Columns: list (duplicate|misspelt), books, name, other (similar name or correct spelling), note
 KNOWN_ISSUES = os.path.join(HERE, 'known_issues.csv')

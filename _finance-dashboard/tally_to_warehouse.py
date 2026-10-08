@@ -113,8 +113,6 @@ def convert(out, pairs, masters=None):
                                        opening_balance=l['ob'], cost_centres_on=l['cc_on'], source=source[n]))
             for cat, cc, a in l['ccop']:
                 rows['ledger_cc_opening'].append(dict(company=code, ledger=n, category=cat, cost_centre=cc, amount=a))
-        for n, (p, cat) in costcentres.items():
-            rows['costcentre'].append(dict(company=code, cost_centre=n, parent=p, category=cat))
         eid = 0
         for v in root.iter('VOUCHER'):
             if t(v, 'ISCANCELLED') == 'Yes' or t(v, 'ISOPTIONAL') == 'Yes' or t(v, 'ISDELETED') == 'Yes':
@@ -135,6 +133,12 @@ def convert(out, pairs, masters=None):
                         rows['cc_alloc'].append(dict(company=code, entry_id=entry_id, date=date, month=date[:7],
                                                      ledger=t(le, 'LEDGERNAME'), category=t(cat, 'CATEGORY'),
                                                      cost_centre=t(cc, 'NAME'), amount=round(amt(cc.findtext('AMOUNT')), 2)))
+        # Exports without cost-centre masters: take the names (and category) from the allocations
+        for r in rows['cc_alloc']:
+            if r['company'] == code and r['cost_centre'] not in costcentres:
+                costcentres[r['cost_centre']] = ('', r['category'])
+        for n, (p, cat) in costcentres.items():
+            rows['costcentre'].append(dict(company=code, cost_centre=n, parent=p, category=cat))
     names = dict(company='dim_company', group='dim_group', ledger='dim_ledger', ledger_cc_opening='fact_ledger_cc_opening', opening_mismatch='check_opening_mismatch', costcentre='dim_costcentre',
                  voucher='dim_voucher', entry='fact_entry', cc_alloc='fact_costcentre_alloc')
     for k, rs in rows.items():
