@@ -25,5 +25,7 @@ security add-generic-password -s dhs-finance-dashboard -a dashboard -w   # promp
 1. In Tally, export the Day Book (XML Data Interchange, financial year to date) for all four companies and download
    the files to `~/Downloads`. File names don't matter; the company is read from the file content.
 2. Double-click `_finance-dashboard/update_dashboard.command`, or run `/update-finance-dashboard` in Claude Code.
+   The Claude Code command also refreshes the private, unencrypted copy of the dashboard on claude.ai
+   (`refresh_dashboard.py --artifact-page FILE`, which refuses to write inside this repository).
 
 Company names are mapped to codes in `COMPANIES` at the top of `refresh_dashboard.py`.

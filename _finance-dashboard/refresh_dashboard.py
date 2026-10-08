@@ -400,10 +400,27 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--inbox', default='~/Downloads', help='folder with the Tally XML exports')
     ap.add_argument('--warehouse', default=HERE, help='folder for CSV tables and the XML archive')
-    ap.add_argument('--site', required=True, help='folder in the website repository that receives index.html')
+    ap.add_argument('--site', help='folder in the website repository that receives index.html')
     ap.add_argument('--allow-partial', action='store_true', help='build even if not all four companies are present')
     ap.add_argument('--no-archive', action='store_true', help='leave the XML files in the inbox')
+    ap.add_argument('--artifact-page', metavar='FILE',
+                    help='only write the UNENCRYPTED dashboard (for the private claude.ai artifact) from the existing '
+                         'tables in --warehouse to FILE, which must be outside the repository; nothing else is done')
     a = ap.parse_args()
+
+    if a.artifact_page:
+        target = os.path.realpath(a.artifact_page)
+        repo = os.path.realpath(os.path.join(HERE, '..'))
+        if os.path.commonpath([target, repo]) == repo:
+            sys.exit('Refusing to write the unencrypted dashboard inside the repository; choose a path outside it.')
+        data = build_data(os.path.join(a.warehouse, 'tables'))
+        template = open(os.path.join(HERE, 'dashboard_template.html'), encoding='utf-8').read()
+        with open(target, 'w', encoding='utf-8') as f:
+            f.write(template.replace('__DATA__', json.dumps(data, ensure_ascii=False, separators=(',', ':'))))
+        print(f'Artifact page written to {target} ({data["period"]["label"]}, {len(data["flags"])} points to check)')
+        return
+    if not a.site:
+        ap.error('--site is required')
 
     password = os.environ.get('DASHBOARD_PASSWORD')
     if not password:
