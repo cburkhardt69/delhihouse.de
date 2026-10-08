@@ -77,9 +77,20 @@ def _words():
         return None
 
 
+# Everyday words missing from the macOS dictionary (web2 is old and American)
+EXTRA_WORDS = {'internet', 'website', 'online', 'software', 'email', 'childcare', 'consultancy', 'microfinance', 'knowhow',
+               'fundraising', 'healthcare', 'centre', 'programme', 'organisation', 'labour'}
+# Optional, git-ignored list of issues found outside the Day Book export (e.g. in an All Masters export).
+# Columns: list (duplicate|misspelt), books, name, other (similar name or correct spelling), note
+KNOWN_ISSUES = os.path.join(HERE, 'known_issues.csv')
+
+
 def _known(w, words):
-    return (w in words or w.isdigit() or len(w) <= 3
-            or any(w.endswith(s) and w[:-len(s)] in words for s in ('s', 'es', 'ed', 'ing', 'er')))
+    if w in words or w in EXTRA_WORDS or w.isdigit() or len(w) <= 3:
+        return True
+    if w.endswith('ies') and w[:-3] + 'y' in words:
+        return True
+    return any(w.endswith(s) and w[:-len(s)] in words for s in ('s', 'es', 'd', 'ed', 'ing', 'er', 'ship'))
 
 
 def _edit_distance(a, b):
@@ -144,6 +155,65 @@ def find_duplicates(led, ent, cca, orgs):
                 books = ', '.join(sorted({r['company'] for r in cca if orgs[r['company']] == org and r['cost_centre'] in (x, y)}))
                 out.append(['Cost centre', books, x, y, why, posts[('C', org, x)], posts[('C', org, y)]])
     return out
+
+
+def find_misspellings(led, costcentres):
+    """Names containing a word that is not in the dictionary but is one or two letters away from a known word.
+    Party and staff accounts (mostly people and firms) are only compared with words used elsewhere in the books."""
+    words = _words()
+    if words is None:
+        return []
+    tok = lambda s: re.findall(r'[a-z0-9`]+', s.lower())
+    names = ([('Ledger', r['company'], r['ledger'], r['nature'] in ('Income', 'Expense')) for r in led]
+             + [('Cost centre', r['company'], r['cost_centre'], True) for r in costcentres])
+    corpus = {w for _, _, n, _ in names for w in tok(n) if len(w) >= 4 and _known(w, words)}
+    by_len = defaultdict(list)
+    for w in words:
+        if w.isalpha() and w.islower():
+            by_len[len(w)].append(w)
+
+    def best(w, cands, lim):
+        def suffix(c):
+            n = 0
+            while n < min(len(c), len(w)) and c[-1 - n] == w[-1 - n]:
+                n += 1
+            return n
+        scored = [(_edit_distance(w, c), -suffix(c), c) for c in cands if abs(len(c) - len(w)) <= lim]
+        top = min(scored, default=None)
+        return top[2] if top and top[0] <= lim else None
+
+    cache = {}
+
+    def suggest(w, use_dict):
+        if (w, use_dict) not in cache:
+            s = None
+            if len(w) >= 5 and not any(ch.isdigit() for ch in w) and not _known(w, words):
+                lim = 1 if len(w) < 8 else 2
+                s = best(w, corpus, lim)
+                if s is None and use_dict and len(w) >= 8:
+                    s = best(w, [c for n in range(len(w) - lim, len(w) + lim + 1) for c in by_len.get(n, ()) if c[0] == w[0]], lim)
+            cache[(w, use_dict)] = s
+        return cache[(w, use_dict)]
+
+    found = {}
+    for kind, company, name, use_dict in names:
+        fixes = [f'"{w}" → "{s}"' for w in tok(name) for s in [suggest(w, use_dict)] if s]
+        if fixes:
+            found.setdefault((kind, name), [set(), ', '.join(fixes)])[0].add(company)
+    return [[k, ', '.join(sorted(cs)), n, fx] for (k, n), (cs, fx) in sorted(found.items())]
+
+
+def known_issues():
+    if not os.path.exists(KNOWN_ISSUES):
+        return [], []
+    dups, miss = [], []
+    for r in read(KNOWN_ISSUES):
+        note = (r.get('note') or '').strip() or 'Recorded manually'
+        if r['list'].strip().lower() == 'duplicate':
+            dups.append(['Ledger', r['books'], r['name'], r['other'], note, '–', '–'])
+        else:
+            miss.append(['Ledger', r['books'], r['name'], f'→ "{r["other"]}" ({note})'])
+    return dups, miss
 
 
 def build_data(tables):
@@ -245,14 +315,20 @@ def build_data(tables):
         flags.append(['warn', 'The fund side of the balance sheet is incomplete',
                       f'Opening balances do not add up to zero in {", ".join(gaps)} because a Day Book export only includes ledgers with transactions. '
                       'Cash and bank balances are complete; export All Masters as well for a full balance sheet.'])
-    # 7. ledgers and cost centres that look like duplicates
-    dups = find_duplicates(led, ent, cca, orgs)
+    # 7. ledgers and cost centres that look like duplicates, and misspelt names
+    kd, km = known_issues()
+    dups = find_duplicates(led, ent, cca, orgs) + kd
+    costcentres = read(f'{tables}/dim_costcentre.csv') if os.path.exists(f'{tables}/dim_costcentre.csv') else []
+    miss = find_misspellings(led, costcentres) + km
     if dups:
         flags.append(['warn', f'{len(dups)} possible duplicate {"ledgers or cost centres" if len(dups) > 1 else "ledger or cost centre"}',
                       'The names listed below look like the same account with a typo, an abbreviation or an extra word, so postings may be '
-                      'split between them. The Day Book export only contains ledgers with postings, so duplicates without postings are not detected.'])
+                      'split between them. The Day Book export only contains ledgers with postings; duplicates found elsewhere are added by hand.'])
+    if miss:
+        flags.append(['warn', f'{len(miss)} ledger and cost-centre names are misspelt',
+                      'Listed below with the probable correct spelling. Renaming them in Tally keeps reports and searches consistent.'])
 
-    return dict(dups=dups,companies=co, months=months, ccs=ccs, period=period, built=dt.date.today().strftime('%-d %b %Y'),
+    return dict(dups=dups, miss=miss,companies=co, months=months, ccs=ccs, period=period, built=dt.date.today().strftime('%-d %b %Y'),
                 ledgers=[[comps.index(r['company']), r['ledger'], r['group_name'], r['primary_group'], r['nature'], round(r['opening_balance'], 2)] for r in led],
                 lines=lines, nocc=nocc, flags=flags)
 

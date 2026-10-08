@@ -135,8 +135,11 @@ svg text{fill:var(--muted);font-family:var(--sans);font-size:11px}
       <ul class="flags" id="flags"></ul>
       <h3 class="sub3">Possible duplicate ledgers and cost centres</h3>
       <div class="tbl"><table id="dups"></table></div>
-      <div class="hint">Found automatically from the names: a misspelt word, or for party and staff accounts in the same group, one name contained in the other. Please confirm with the accountant before merging.</div>
-      <h3 class="sub3">All income and expense postings without a cost centre</h3>
+      <div class="hint">Found from the names: a misspelt word, or for party and staff accounts in the same group, one name contained in the other. Cases from other Tally exports are added by hand and show no posting count. Please confirm with the accountant before merging.</div>
+      <h3 class="sub3">Misspelt ledger and cost-centre names</h3>
+      <div class="tbl"><table id="miss"></table></div>
+      <div class="hint">Words not in the dictionary that are one or two letters away from a known word. Names of people and firms are only compared with words used elsewhere in the books, so most proper names are not listed.</div>
+      <h3 class="sub3">Income and expense postings without a cost centre</h3>
       <div class="hint" id="noccsum" style="margin:0 0 8px"></div>
       <div class="tbl"><table id="nocc"></table></div>
     </section>
@@ -205,7 +208,7 @@ function orgTable(){
 }
 
 function render(){
-  syncGroups();orgTable();
+  syncGroups();orgTable();noccTable();
   const R=lines(), RA=lines(false);
   const exp=R.filter(r=>L[r[0]].nature==='Expense'), inc=R.filter(r=>L[r[0]].nature==='Income');
   const tExp=exp.reduce((s,r)=>s+r[3],0), tInc=-inc.reduce((s,r)=>s+r[3],0);
@@ -278,7 +281,14 @@ if(D.months.length)document.getElementById('cumh').textContent='Cumulative incom
 document.getElementById('flags').innerHTML=D.flags.length?D.flags.map(([c,t,d])=>`<li class="flag ${c==='crit'?'crit':''}"><b>${esc(t)}</b>${esc(d)}</li>`).join(''):'<li class="hint">No issues detected by the automatic checks.</li>';
 document.getElementById('dups').innerHTML=D.dups.length?'<tr><th>Type</th><th>Books</th><th>Name</th><th>Similar name</th><th>Why</th><th class="num">Postings (name / similar)</th></tr>'+
   D.dups.map(r=>`<tr><td style="white-space:nowrap">${esc(r[0])}</td><td><span class="tag">${esc(r[1])}</span></td><td>${esc(r[2])}</td><td>${esc(r[3])}</td><td>${esc(r[4])}</td><td class="num" style="white-space:nowrap">${r[5]} / ${r[6]}</td></tr>`).join(''):'<tr><td class="hint">No similar names found.</td></tr>';
-document.getElementById('noccsum').textContent=D.nocc.length?`Whole period, all four sets of books: `+D.companies.map((c,i)=>{const rs=D.nocc.filter(r=>r[0]===i);return rs.length?`${c.company} ${rs.length} postings, ${fmt(rs.reduce((s,r)=>s+r[4],0))}`:null}).filter(Boolean).join(' · ')+'. Not affected by the filters at the top.':'';
-document.getElementById('nocc').innerHTML=D.nocc.length?'<tr><th>Books</th><th>Date</th><th>Voucher</th><th>Ledger</th><th>Type</th><th class="num">Amount</th><th>Narration</th></tr>'+D.nocc.map(r=>{const n=(L.find(l=>l.c===r[0]&&l.name===r[3])||{}).nature||'';return `<tr><td><span class="tag">${esc(D.companies[r[0]].company)}</span></td><td style="white-space:nowrap">${esc(r[1])}</td><td style="white-space:nowrap">${esc(r[2])}</td><td>${esc(r[3])}</td><td>${esc(n)}</td><td class="num">${fmt(r[4])}</td><td>${esc(r[5])}</td></tr>`}).join(''):'<tr><td class="hint">Every income and expense posting has a cost centre.</td></tr>';
+document.getElementById('miss').innerHTML=D.miss.length?'<tr><th>Type</th><th>Books</th><th>Name</th><th>Probable correction</th></tr>'+
+  D.miss.map(r=>`<tr><td style="white-space:nowrap">${esc(r[0])}</td><td><span class="tag">${esc(r[1])}</span></td><td>${esc(r[2])}</td><td>${esc(r[3])}</td></tr>`).join(''):'<tr><td class="hint">No misspelt names found.</td></tr>';
+function noccTable(){
+  const rows=D.nocc.filter(r=>on[r[0]]&&(month<0||r[1].slice(0,7)===D.months[month]));
+  const per=month<0?D.period.label:new Date(D.months[month]+'-01T00:00:00').toLocaleString('en-GB',{month:'long',year:'numeric'});
+  const parts=D.companies.map((c,i)=>{const rs=rows.filter(r=>r[0]===i);return rs.length?`${c.company} ${rs.length} ${rs.length===1?'posting':'postings'}, ${fmt(rs.reduce((s,r)=>s+r[4],0))}`:null}).filter(Boolean);
+  document.getElementById('noccsum').textContent=`${per}, selected books: `+(parts.length?parts.join(' · ')+'.':'none.')+' Follows the filters at the top.';
+  document.getElementById('nocc').innerHTML=rows.length?'<tr><th>Books</th><th>Date</th><th>Voucher</th><th>Ledger</th><th>Type</th><th class="num">Amount</th><th>Narration</th></tr>'+rows.map(r=>{const n=(L.find(l=>l.c===r[0]&&l.name===r[3])||{}).nature||'';return `<tr><td><span class="tag">${esc(D.companies[r[0]].company)}</span></td><td style="white-space:nowrap">${esc(r[1])}</td><td style="white-space:nowrap">${esc(r[2])}</td><td>${esc(r[3])}</td><td>${esc(n)}</td><td class="num">${fmt(r[4])}</td><td>${esc(r[5])}</td></tr>`}).join(''):'<tr><td class="hint">No income or expense posting without a cost centre in the selected books and period.</td></tr>';
+}
 render();
 </script>

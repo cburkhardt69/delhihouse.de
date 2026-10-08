@@ -61,7 +61,10 @@ used XML exports are moved to `_finance-dashboard/archive/<date>/`. Both folders
 - Automatic checks in `build_data()`: unbalanced vouchers; DHS vs LDI inter-company balances that don't mirror each
   other (per FC and Local); admin cost centres (H O Share, Operation/Personal Administration) above 20% of FC received
   (FCRA admin limit); expenses without cost centre; a bank ledger appearing in several sets of books; opening
-  balances not summing to zero.
+  balances not summing to zero; possible duplicate ledgers/cost centres and misspelt names (word-level check against
+  `/usr/share/dict/words`; party and staff accounts only against words used elsewhere in the books, to skip proper names).
+- Issues that the Day Book export cannot show (e.g. a misspelt ledger without postings, seen in an All Masters export)
+  go into `known_issues.csv` (columns `list` = duplicate|misspelt, `books`, `name`, `other`, `note`). It is git-ignored.
 - Published at https://delhihouse.de/finance/ via GitHub Pages. GitHub Pages is always public, so the page is a
   password prompt; the dashboard HTML is AES-GCM encrypted (PBKDF2-SHA256, 600k iterations) and decrypted in the
   browser. Password in the macOS Keychain (`dhs-finance-dashboard`). Page carries `noindex`.
