@@ -1,0 +1,11 @@
+.DS_Store
+__pycache__/
+# Financial data must never be committed; only finance/index.html (encrypted) is published
+_finance-dashboard/**/*.xml
+_finance-dashboard/**/*.csv
+_finance-dashboard/tables/
+_finance-dashboard/archive/
+
+# Private Claude Code notes (financial findings)
+CLAUDE.local.md
+.claude/_old/
