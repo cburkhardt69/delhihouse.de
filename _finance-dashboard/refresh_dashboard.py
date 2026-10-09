@@ -298,7 +298,44 @@ def build_data(tables):
                           f'DHS-{fund} shows a net {"receivable" if sa >= 0 else "payable"} of {lakh(sa)} towards LDI; LDI-{fund} shows a net '
                           f'{"payable" if sb <= 0 else "receivable"} of {lakh(sb)} towards DHS. The two should mirror each other; the gap is {lakh(sa + sb)}.'
                           + (' For FC funds this also bears on FCRA, which prohibits passing foreign contribution to another organisation.' if fund == 'FC' else '')])
-    # 3. administration share in FC books
+    # 2b. the same money booked twice: received from the other organisation in one set of books, and on the same day
+    #     for the same amount as donation income into a bank account of the other organisation's books
+    led_group = {(r['company'], r['ledger']): r['group_name'] for r in led}
+    by_voucher = defaultdict(list)
+    for r in ent:
+        by_voucher[(r['company'], r['voucher_guid'])].append(r)
+    for fund in ('FC', 'Local'):
+        for org, other in (('DHS', 'LDI'), ('LDI', 'DHS')):
+            a = [c for c in comps if orgs[c] == org and funds[c] == fund]
+            b = [c for c in comps if orgs[c] == other and funds[c] == fund]
+            received = defaultdict(list)  # money received from the other organisation, booked against the inter-company ledger
+            for r in ent:
+                if r['company'] in a and r['amount'] < 0 and OTHER_ORG[org].search(r['ledger']) \
+                        and nature.get((r['company'], r['ledger'])) in ('Asset', 'Liability'):
+                    received[(r['date'], round(-r['amount'], 2))].append(r)
+            twice = []
+            for r in ent:
+                if r['company'] in b and r['amount'] < 0 and nature.get((r['company'], r['ledger'])) == 'Income':
+                    key = (r['date'], round(-r['amount'], 2))
+                    banked = any(led_group.get((x['company'], x['ledger'])) in ('Bank Accounts', 'Cash-in-Hand')
+                                 for x in by_voucher[(r['company'], r['voucher_guid'])])
+                    if key in received and banked:
+                        mine = received[key][0]
+                        va, vb = vch.get((mine['company'], mine['voucher_guid']), {}), vch.get((r['company'], r['voucher_guid']), {})
+                        twice.append((r['date'], -r['amount'], r['ledger'], mine['company'],
+                                      f"{va.get('voucher_type', '')} {va.get('voucher_number', '')}".strip(), r['company'],
+                                      f"{vb.get('voucher_type', '')} {vb.get('voucher_number', '')}".strip()))
+            if twice:
+                total = sum(x[1] for x in twice)
+                items = '; '.join(f'{dt.date.fromisoformat(d).day} {dt.date.fromisoformat(d):%b} {lakh(v)} ({ca} {va} / {cb} {vb})'
+                                  for d, v, _, ca, va, cb, vb in twice)
+                flags.append(['crit', f'{lakh(total)} of {fund} donations is booked in both {org} and {other} books',
+                              f'{len(twice)} {"receipts" if len(twice) > 1 else "receipt"} from "{twice[0][2]}" '
+                              f'{"are" if len(twice) > 1 else "is"} recorded in {other}-{fund} as donation income paid into its own bank, '
+                              f'while {org}-{fund} records the same amount on the same day as received from {other} into its bank: {items}. '
+                              f'The money can only have arrived in one account, so cash and bank is probably overstated by {lakh(total)}, '
+                              f'and this explains the same amount of the gap between the two sets of books. '
+                              f'Check the bank statements and correct the wrong side in Tally.'])
     for c in comps:
         if funds[c] != 'FC':
             continue
