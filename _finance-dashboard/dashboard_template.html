@@ -230,7 +230,7 @@ function render(){
   const per=month<0?D.period.short:mName(D.months[month]);
   document.getElementById('kpis').innerHTML=[
     ['Income',lakh(tInc),per+' · donations and interest'],
-    ['Expenditure',lakh(tExp),per+' · all expense heads'],
+    ['Expenditure',lakh(tExp),per+' · all expense heads incl. fixed-asset purchases'],
     ['Surplus / deficit',lakh(tInc-tExp),'income less expenditure'],
     ['Cash and bank',lakh(tCash),'all accounts on '+D.period.toLabel],
     ['Admin cost centres',tExp?Math.round(adm/tExp*100)+'%':'–','H O Share, Operation and Personal Administration as share of spend'],

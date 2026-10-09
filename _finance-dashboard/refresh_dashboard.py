@@ -230,6 +230,12 @@ def build_data(tables):
         r['amount'] = float(r['amount'])
     for r in led:
         r['opening_balance'] = float(r['opening_balance'] or 0)
+    # Fixed-asset purchases (e.g. the ambulance) count as expenditure, as in a receipts-and-payments / FCRA utilisation view
+    capex = {(r['company'], r['ledger']) for r in led if r['primary_group'] == 'Fixed Assets'}
+    for r in led:
+        if (r['company'], r['ledger']) in capex:
+            r['nature'] = 'Expense'
+    show_name = lambda c, l: f'{l} (fixed asset)' if (c, l) in capex else l
 
     lkey = {(r['company'], r['ledger']): i for i, r in enumerate(led)}
     months = sorted({r['month'] for r in ent})
@@ -266,7 +272,7 @@ def build_data(tables):
             continue
         v = vch.get((r['company'], r['voucher_guid']), {})
         nocc.append([comps.index(r['company']), r['date'], f"{v.get('voucher_type', '')} {v.get('voucher_number', '')}".strip(),
-                     r['ledger'], abs(round(r['amount'], 2)), (v.get('narration') or '')[:160]])
+                     show_name(r['company'], r['ledger']), abs(round(r['amount'], 2)), (v.get('narration') or '')[:160]])
     nocc.sort(key=lambda x: (x[0], x[1]))
 
     flags = []
@@ -303,11 +309,12 @@ def build_data(tables):
                           f'The administration cost centres total {lakh(exp)} against {lakh(inc)} foreign contribution received in the period. '
                           'FCRA caps administrative expenses at 20% of FC received; check with the accountant whether these cost centres match the FCRA definition.'])
     # 4. expenses without cost centre
+    nature_shown = {(c, show_name(c, l)): n for (c, l), n in nature.items()}
     for i, c in enumerate(comps):
-        rows = [x for x in nocc if x[0] == i and nature.get((c, x[3])) == 'Expense']
+        rows = [x for x in nocc if x[0] == i and nature_shown.get((c, x[3])) == 'Expense']
         if rows:
             flags.append(['warn', f'{lakh(sum(x[4] for x in rows))} of {c} expenditure has no cost centre',
-                          f'{len(rows)} postings, listed below, are not assigned to any project.'])
+                          f'{len(rows)} {"postings" if len(rows) > 1 else "posting"}, listed below, {"are" if len(rows) > 1 else "is"} not assigned to any project.'])
     # 5. bank accounts that appear in more than one set of books
     banks, label = defaultdict(set), {}
     for r in led:
@@ -375,7 +382,7 @@ def build_data(tables):
                       'Listed below with the probable correct spelling. Renaming them in Tally keeps reports and searches consistent.'])
 
     return dict(dups=dups, miss=miss, ccob=ccob,companies=co, months=months, ccs=ccs, period=period, built=dt.date.today().strftime('%-d %b %Y'),
-                ledgers=[[comps.index(r['company']), r['ledger'], r['group_name'], r['primary_group'], r['nature'], round(r['opening_balance'], 2)] for r in led],
+                ledgers=[[comps.index(r['company']), show_name(r['company'], r['ledger']), r['group_name'], r['primary_group'], r['nature'], round(r['opening_balance'], 2)] for r in led],
                 lines=lines, nocc=nocc, flags=flags)
 
 
