@@ -45,6 +45,9 @@ select{font:inherit;font-size:.82rem;border:1px solid var(--line);background:var
 @media (max-width:820px){.grid{grid-template-columns:minmax(0,1fr)}}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;min-width:0}
 .wide{grid-column:1/-1}
+.split{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+.stack{display:grid;gap:16px;min-width:0}
+@media (max-width:820px){.split{grid-template-columns:minmax(0,1fr)}}
 .bars{display:grid;gap:4px}
 .bar{display:grid;grid-template-columns:minmax(0,1fr) 92px;gap:10px;align-items:center;padding:3px 4px;border-radius:6px;cursor:default;background:none;border:0;color:inherit;font:inherit;text-align:left;width:100%}
 button.bar{cursor:pointer}
@@ -103,16 +106,26 @@ svg text{fill:var(--muted);font-family:var(--sans);font-size:11px}
       <div class="hint">Running totals from the start of the financial year to the end of each month. The gap between the lines is the surplus or deficit so far.</div>
     </section>
 
-    <section class="panel">
-      <h2>Expenditure by cost centre</h2>
-      <div class="bars" id="ccbars"></div>
-      <div class="hint">Select a cost centre to break it down by expense head.</div>
-    </section>
+    <div class="split">
+      <section class="panel">
+        <h2>Expenditure by cost centre</h2>
+        <div class="bars" id="ccbars"></div>
+        <div class="hint">Includes fixed-asset purchases. Select a cost centre to see its expense heads and fixed-asset purchases on the right.</div>
+      </section>
 
-    <section class="panel">
-      <h2 id="ledtitle">Expenditure by expense head</h2>
-      <div class="bars" id="ledbars"></div>
-    </section>
+      <div class="stack">
+        <section class="panel">
+          <h2 id="ledtitle">Expenditure by expense head</h2>
+          <div class="bars" id="ledbars"></div>
+        </section>
+
+        <section class="panel">
+          <h2 id="fatitle">Fixed-asset purchases</h2>
+          <div class="bars" id="fabars"></div>
+          <div class="hint">Purchases booked to Fixed Assets ledgers, such as vehicles or furniture. They count towards total expenditure but are not expense heads.</div>
+        </section>
+      </div>
+    </div>
 
     <section class="panel">
       <h2>Income by donor and source</h2>
@@ -175,7 +188,7 @@ function lines(useMonth=true){return D.lines.filter(([li,mi])=>on[L[li].c]&&(!us
 function sumBy(rows,key){const m=new Map();rows.forEach(r=>{const k=key(r);m.set(k,(m.get(k)||0)+r[3])});return m}
 function barList(el,entries,opts={}){
   const max=Math.max(1,...entries.map(e=>Math.abs(e.v)));
-  el.innerHTML=entries.length?'':'<div class="hint">Nothing in the selected books and period.</div>';
+  el.innerHTML=entries.length?'':`<div class="hint">${opts.empty||'Nothing in the selected books and period.'}</div>`;
   entries.forEach(e=>{const tag=opts.click?'button':'div';const b=document.createElement(tag);b.className='bar'+(opts.sel===e.k?' sel':'');
     const segs=(e.parts||[[e.v,opts.color||'var(--accent)']]).map(([v,col])=>`<i style="width:${Math.abs(v)/max*100}%;background:${col}"></i>`).join('');
     b.innerHTML=`<div style="min-width:0"><div class="lab" title="${esc(e.k)}">${esc(e.label||e.k)}</div><div class="trk">${segs}</div></div><div class="num">${fmt(e.v)}</div>`;
@@ -269,8 +282,11 @@ function render(){
   if(selCC&&!ccE.some(e=>e.k===selCC))selCC=null;
   barList(document.getElementById('ccbars'),ccE,{sel:selCC,click:k=>{selCC=selCC===k?null:k;render()}});
   const ex2=selCC?exp.filter(r=>(D.ccs[r[2]]||'(no cost centre)')===selCC):exp;
+  const isFA=r=>L[r[0]].primary==='Fixed Assets', faName=n=>n.replace(/ \(fixed asset\)$/,'');
   document.getElementById('ledtitle').textContent=selCC?'Expense heads · '+selCC:'Expenditure by expense head';
-  barList(document.getElementById('ledbars'),stacked(ex2,r=>L[r[0]].name).sort((a,b)=>b.v-a.v).slice(0,14));
+  barList(document.getElementById('ledbars'),stacked(ex2.filter(r=>!isFA(r)),r=>L[r[0]].name).sort((a,b)=>b.v-a.v).slice(0,14));
+  document.getElementById('fatitle').textContent=selCC?'Fixed-asset purchases · '+selCC:'Fixed-asset purchases';
+  barList(document.getElementById('fabars'),stacked(ex2.filter(isFA),r=>faName(L[r[0]].name)).sort((a,b)=>b.v-a.v),{empty:'No fixed-asset purchases in the selected books and period.'});
   // donors
   barList(document.getElementById('donors'),stacked(inc,r=>L[r[0]].name).map(e=>({...e,v:-e.v,parts:e.parts.map(([v,c])=>[-v,c])})).sort((a,b)=>b.v-a.v));
   // banks
